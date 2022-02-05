@@ -66,7 +66,7 @@ defer conn.Close()
 fmt.Printf("Connected to the Threema network\n")
 ```
 
-Before sending the first message, you'll need to create a `threema.Hanler` to react to inbound events. The handler is constructed as an *"abstract interface"* so you can provide only the methods you're interested in and drop everything else onto the floor.
+Before sending the first message, you'll need to create a `threema.Handler` to react to inbound events. The handler is constructed as an *"abstract interface"* so you can provide only the methods you're interested in and drop everything else onto the floor.
 
 ```go
 // There are various events that a user might want to react to. These are
