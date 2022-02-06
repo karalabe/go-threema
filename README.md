@@ -133,7 +133,7 @@ $ export THREEMA_ID_BACKUP=A4G3-BF25-JEN4-EA7Q-XSMG-AIYL-A2W6-CCTW-VYGW-HT3L-KVA
 $ export THREEMA_ID_SECRET=1337speak
 ```
 
-After injecting the sender's credentials, you can fire away with sending messages to your desired recipients. Providing the recipient public key is *optional*, but *highly recommended* to avoid hitting the Threema directory service at every invocation.
+After injecting the sender's credentials, you can fire away with sending messages to your desired recipients. Providing the recipient public key `--to.pubkey` is *optional*, but *highly recommended* to avoid hitting the Threema directory service at every invocation.
 
 ```sh
 $ threema send text --to DEADBEEF --msg "Hello Threema!"
