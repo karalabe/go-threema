@@ -43,8 +43,6 @@ type Identity struct {
 
 // Identify decrypts and loads an identity exported from Threema. It is in the
 // form of `XXXX-XXXX-...-XXXX` with 20 grouping of 4 characters each.
-//
-// Official code: https://github.com/threema-ch/threema-android/blob/main/domain/src/main/java/ch/threema/domain/identitybackup/IdentityBackupDecoder.java
 func Identify(export string, pass string) (*Identity, error) {
 	// Convert the base32 encoded key into binary form
 	enc, err := base32.StdEncoding.DecodeString(strings.ReplaceAll(export, "-", ""))

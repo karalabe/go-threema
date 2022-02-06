@@ -117,6 +117,30 @@ if err := id.Trust(friend, pubkey); err != nil {
 fmt.Printf("We've just trusted %s to message with\n", friend)
 ```
 
+## Quick sends from the CLI
+
+This library also has a small CLI utility to do some initial testing or quick-and-dirty integrations. You can install it directly via Go. If you're not using Go regularly, you might need to add the install path to your `PATH` end var.
+
+```sh
+$ go install github.com/karalabe/go-threema/cmd/threema@latest
+```
+
+Before you can send a message, you need the sender's exported identity and its decryption key. You can either provide them as `--id` and `--id.secret`, but it might be simpler and safer to use env vars:
+
+```sh
+# Do note again, these are fake credentials
+$ export THREEMA_ID_BACKUP=A4G3-BF25-JEN4-EA7Q-XSMG-AIYL-A2W6-CCTW-VYGW-HT3L-KVA7-TTG7-VF2G-RHMY-YB5I-ER7S-WQMU-XF4Y-PZLU-XJFN
+$ export THREEMA_ID_SECRET=1337speak
+```
+
+After injecting the sender's credentials, you can fire away with sending messages to your desired recipients. Providing the recipient public key is *optional*, but *highly recommended* to avoid hitting the Threema directory service at every invocation.
+
+```sh
+$ threema send text --to DEADBEEF --msg "Hello Threema!"
+```
+
+*Note, the CLI sender will not have any inbound message handlers set, so anything that is received during connectivity will be dropped on the floor. They **will** get acked to the Threema server and lost!*
+
 ## Contributing
 
 *Don't.*

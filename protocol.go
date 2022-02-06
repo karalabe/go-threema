@@ -85,9 +85,11 @@ const (
 func (c *Connection) reader() {
 	// If the reader terminates, signal that the connection was severed
 	defer func() {
-		if c.handler.Closed != nil {
-			c.handler.Closed()
+		if c.handler.Closed == nil {
+			log.Printf("No handler for connection termination")
+			return
 		}
+		c.handler.Closed()
 	}()
 	defer close(c.readerDown)
 
