@@ -74,6 +74,12 @@ const (
 	messageAuthToken           = 0xff
 )
 
+const (
+	// heartbeat is the interval at which to send an echo message to keep the
+	// connection to the server alive.
+	heartbeat = 3 * time.Minute
+)
+
 // reader is an infinite loop that keeps pulling and delivering messages until
 // the connection dies.
 func (c *Connection) reader() {
@@ -150,7 +156,7 @@ func (c *Connection) reader() {
 			}
 			// Either way, ack the message to avoid double delivers
 			select {
-			case c.ackCh <- &messageAck{sender: from, id: id}:
+			case c.sendAckCh <- &messageAck{sender: from, id: id}:
 			case <-c.term:
 				c.conn.Close()
 				return
@@ -219,6 +225,10 @@ func (c *Connection) sender() {
 	// If the sender terminates, signal that no more messages are accepted
 	defer close(c.term)
 
+	// Send a heartbeat every now and again
+	pinger := time.NewTimer(1) // Trigger an echo instantly
+	defer pinger.Stop()
+
 	for {
 		// Retrieve the next wire message to send and serialize it
 		var (
@@ -226,7 +236,16 @@ func (c *Connection) sender() {
 			unblock chan error
 		)
 		select {
-		case ack := <-c.ackCh:
+		case <-pinger.C:
+			// A lot of time passed since the last ping, make sure the connection
+			// and routing tables stay alive.
+			message = append(message, []byte{payloadEchoRequest, 0x00, 0x00, 0x00}...)
+			message = append(message, serializeUint32(uint32(0))...) // we're not tracking the echo, same seqnum is fine
+
+			// Restart the ping timer
+			pinger.Reset(heartbeat)
+
+		case ack := <-c.sendAckCh:
 			// We've received a message, ack it to not get it again
 			message = append(message, []byte{payloadIncomingMessageAck, 0x00, 0x00, 0x00}...)
 			message = append(message, []byte(ack.sender)...)

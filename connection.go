@@ -57,7 +57,7 @@ type Connection struct {
 	serverKey *[publicLength]byte // Session public key to encrypt client messages with
 
 	term       chan struct{}     // Channel to signal the connection being dead
-	ackCh      chan *messageAck  // Channel for sending a message ack to Threema
+	sendAckCh  chan *messageAck  // Channel for sending a message ack to Threema
 	sendTextCh chan *sendTextReq // Channel to send a text message to Threema
 }
 
@@ -74,8 +74,8 @@ func Connect(id *Identity, handler *Handler) (*Connection, error) {
 		id:         id,
 		handler:    handler,
 		conn:       conn,
-		ackCh:      make(chan *messageAck),
 		term:       make(chan struct{}),
+		sendAckCh:  make(chan *messageAck),
 		sendTextCh: make(chan *sendTextReq),
 	}
 	// Wrap the connection into the NaCl crypto stream and login
