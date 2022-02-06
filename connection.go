@@ -56,7 +56,9 @@ type Connection struct {
 	clientKey *[secretLength]byte // Session private key to decrypt server messages with
 	serverKey *[publicLength]byte // Session public key to encrypt client messages with
 
-	term       chan struct{}     // Channel to signal the connection being dead
+	readerDown chan struct{} // Channel to signal that the connection dropped (signal app)
+	senderDown chan struct{} // Channel to signal that the sender aborted (unblock sends)
+
 	sendAckCh  chan *messageAck  // Channel for sending a message ack to Threema
 	sendTextCh chan *sendTextReq // Channel to send a text message to Threema
 }
@@ -74,7 +76,8 @@ func Connect(id *Identity, handler *Handler) (*Connection, error) {
 		id:         id,
 		handler:    handler,
 		conn:       conn,
-		term:       make(chan struct{}),
+		readerDown: make(chan struct{}),
+		senderDown: make(chan struct{}),
 		sendAckCh:  make(chan *messageAck),
 		sendTextCh: make(chan *sendTextReq),
 	}

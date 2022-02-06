@@ -83,6 +83,14 @@ const (
 // reader is an infinite loop that keeps pulling and delivering messages until
 // the connection dies.
 func (c *Connection) reader() {
+	// If the reader terminates, signal that the connection was severed
+	defer func() {
+		if c.handler.Closed != nil {
+			c.handler.Closed()
+		}
+	}()
+	defer close(c.readerDown)
+
 	for {
 		// Read the next 2 bytes as the message length marker
 		len := make([]byte, 2)
@@ -157,7 +165,7 @@ func (c *Connection) reader() {
 			// Either way, ack the message to avoid double delivers
 			select {
 			case c.sendAckCh <- &messageAck{sender: from, id: id}:
-			case <-c.term:
+			case <-c.senderDown:
 				c.conn.Close()
 				return
 			}
@@ -223,7 +231,7 @@ type messageAck struct {
 // sender is an loop that keeps sending messages until the connection dies.
 func (c *Connection) sender() {
 	// If the sender terminates, signal that no more messages are accepted
-	defer close(c.term)
+	defer close(c.senderDown)
 
 	// Send a heartbeat every now and again
 	pinger := time.NewTimer(1) // Trigger an echo instantly
@@ -236,6 +244,10 @@ func (c *Connection) sender() {
 			unblock chan error
 		)
 		select {
+		case <-c.readerDown:
+			// The remote connection was interrupted, terminate even if we're idle
+			return
+
 		case <-pinger.C:
 			// A lot of time passed since the last ping, make sure the connection
 			// and routing tables stay alive.

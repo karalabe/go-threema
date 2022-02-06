@@ -26,6 +26,9 @@ type Handler struct {
 	// Error is called when the Threema server sends us an error, specifying if
 	// it is allowed to reconnect or not.
 	Error func(reason string, reconnect bool)
+
+	// Closed is called when the connection to the Threema server terminates.
+	Closed func()
 }
 
 // SendText sends a text message to the given recipient.
@@ -34,7 +37,7 @@ func (c *Connection) SendText(to string, text string) error {
 	select {
 	case c.sendTextCh <- &sendTextReq{to: to, text: text, sent: errc}:
 		return <-errc
-	case <-c.term:
+	case <-c.senderDown:
 		return errors.New("connection closed")
 	}
 }
