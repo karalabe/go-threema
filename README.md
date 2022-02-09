@@ -137,6 +137,7 @@ After injecting the sender's credentials, you can fire away with sending message
 
 ```sh
 $ threema send text --to DEADBEEF --msg "Hello Threema!"
+$ threema send image --to DEADBEEF --img /path/to/duck.png --msg "Dang it's a nice duck"
 ```
 
 *Note, the CLI sender will not have any inbound message handlers set, so anything that is received during connectivity will be dropped on the floor. They **will** get acked to the Threema server and lost!*

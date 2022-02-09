@@ -18,27 +18,6 @@ import (
 	"golang.org/x/crypto/nacl/box"
 )
 
-var (
-	// clientMetadata is the stats we report to the Threema server in the shape
-	// of "Version;PlatformCode;Language/Country;SystemModel;SystemVersion"
-	// - Version:       short string in the format major.minor (e.g. "1.0")
-	// - PlatformCode:  single letter (A = Android, I = iPhone, J = Generic Java)
-	// - Language:      ISO 639-1 (e.g. "de", "en")
-	// - Country:       ISO 3166-1 (e.g. "CH", "DE", "US")
-	// - SystemModel:   phone model
-	// - SystemVersion: Android version string
-	clientMetadata = "4.64;A;en;CH;Pixel 6;12"
-
-	// These are the chat server details of Threema
-	serverPrefixV4 = "g-"            // Prefix for the IPv4 chat server
-	serverGroup    = "33"            // Server group (retrievable from REST)
-	serverSuffix   = ".0.threema.ch" // Suffix for all servers
-	serverPort     = 5222            // Listener port
-
-	serverKey    = &[publicLength]byte{0x45, 0x0b, 0x97, 0x57, 0x35, 0x27, 0x9f, 0xde, 0xcb, 0x33, 0x13, 0x64, 0x8f, 0x5f, 0xc6, 0xee, 0x9f, 0xf4, 0x36, 0x0e, 0xa9, 0x2a, 0x8c, 0x17, 0x51, 0xc6, 0x61, 0xe4, 0xc0, 0xd8, 0xc9, 0x09}
-	serverKeyAlt = &[publicLength]byte{0xda, 0x7c, 0x73, 0x79, 0x8f, 0x97, 0xd5, 0x87, 0xc3, 0xa2, 0x5e, 0xbe, 0x0a, 0x91, 0x41, 0x7f, 0x76, 0xdb, 0xcc, 0xcd, 0xda, 0x29, 0x30, 0xe6, 0xa9, 0x09, 0x0a, 0xf6, 0x2e, 0xba, 0x6f, 0x15}
-)
-
 const (
 	// cookieLength is the length of the randomly generated nonce prefix
 	cookieLength = 16
@@ -61,25 +40,27 @@ type Connection struct {
 	readerDown chan struct{} // Channel to signal that the connection dropped (signal app)
 	senderDown chan struct{} // Channel to signal that the sender aborted (unblock sends)
 
-	sendAckCh  chan *messageAck  // Channel for sending a message ack to Threema
-	sendTextCh chan *sendTextReq // Channel to send a text message to Threema
+	sendAckCh   chan *messageAck   // Channel for sending a message ack to Threema
+	sendTextCh  chan *sendTextReq  // Channel to send a text message to Threema
+	sendImageCh chan *sendImageReq // Channel to send an image message to Threema
 }
 
 // Connect dials the Threema servers and runs the authentication handshake.
 func Connect(id *Identity, handler *Handler) (*Connection, error) {
 	// Establish the unsecure TCP connection to Threema
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", serverPrefixV4+serverGroup+serverSuffix, serverPort))
+	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", chatServerPrefixV4+chatServerGroup+chatServerSuffix, chatServerPort))
 	if err != nil {
 		return nil, err
 	}
 	c := &Connection{
-		id:         id,
-		handler:    handler,
-		conn:       conn,
-		readerDown: make(chan struct{}),
-		senderDown: make(chan struct{}),
-		sendAckCh:  make(chan *messageAck),
-		sendTextCh: make(chan *sendTextReq),
+		id:          id,
+		handler:     handler,
+		conn:        conn,
+		readerDown:  make(chan struct{}),
+		senderDown:  make(chan struct{}),
+		sendAckCh:   make(chan *messageAck),
+		sendTextCh:  make(chan *sendTextReq),
+		sendImageCh: make(chan *sendImageReq),
 	}
 	// Wrap the connection into the NaCl crypto stream and login
 	c.conn.SetDeadline(time.Now().Add(3 * time.Second))
@@ -141,7 +122,7 @@ func (c *Connection) handshake() error {
 	// Decrypt the server hello
 	serverNonce := newNonce(serverCookie)
 
-	serverHelloDec, ok := box.Open(nil, serverHelloEnc, serverNonce.inc(), serverKey, sessSecKey)
+	serverHelloDec, ok := box.Open(nil, serverHelloEnc, serverNonce.inc(), chatServerKey, sessSecKey)
 	if !ok {
 		return errors.New("failed to decrypt server hello")
 	}
@@ -172,13 +153,13 @@ func (c *Connection) login() error {
 	if _, err := io.ReadFull(rand.Reader, authNonce[:]); err != nil {
 		return err
 	}
-	authVouch := box.Seal(nil, clientPubKey[:], &authNonce, serverKey, c.id.secretKey)
+	authVouch := box.Seal(nil, clientPubKey[:], &authNonce, chatServerKey, c.id.secretKey)
 
 	// Create a list of protocol metadata to feed into the server
 	var metadata []byte
 
-	metadata = append(metadata, append([]byte{0x00, byte(len(clientMetadata)), 0x00}, []byte(clientMetadata)...)...) // Client info
-	metadata = append(metadata, append([]byte{0x02, 0x01, 0x00}, 0x01)...)                                           // Payload version
+	metadata = append(metadata, append([]byte{0x00, byte(len(chatClientMetadata)), 0x00}, []byte(chatClientMetadata)...)...) // Client info
+	metadata = append(metadata, append([]byte{0x02, 0x01, 0x00}, 0x01)...)                                                   // Payload version
 
 	// Assemble the login packet to authenticate the user
 	var login []byte

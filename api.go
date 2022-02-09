@@ -5,8 +5,19 @@
 package threema
 
 import (
+	"bytes"
 	"errors"
+	"image"
+	_ "image/gif"
+	"image/jpeg"
+	_ "image/png"
 	"time"
+
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/vp8"
+	_ "golang.org/x/image/vp8l"
+	_ "golang.org/x/image/webp"
 )
 
 // Handler defines the various events that the user's code needs to handle (or
@@ -19,6 +30,9 @@ type Handler struct {
 
 	// Message is called when the account receives a remote message.
 	Message func(from string, nick string, when time.Time, msg string)
+
+	// Image is called when the account receives a remote image transfer.
+	Image func(from string, nick string, when time.Time, image image.Image, thumb image.Image, caption string)
 
 	// Alert is called when the Threema server sends a warning to the user.
 	Alert func(reason string)
@@ -48,4 +62,40 @@ type sendTextReq struct {
 	to   string
 	text string
 	sent chan error
+}
+
+// SendImage sends an image to the given recipient.
+func (c *Connection) SendImage(to string, blob []byte, caption string) error {
+	// Generate a small jpeg thumbnail to download first
+	src, _, err := image.Decode(bytes.NewBuffer(blob))
+	if err != nil {
+		return err
+	}
+	dst := new(bytes.Buffer)
+	if err := jpeg.Encode(dst, src, &jpeg.Options{Quality: 25}); err != nil {
+		return err
+	}
+	errc := make(chan error)
+	select {
+	case c.sendImageCh <- &sendImageReq{
+		to:      to,
+		image:   blob,
+		thumb:   dst.Bytes(),
+		caption: caption,
+		sent:    errc,
+	}:
+		return <-errc
+	case <-c.senderDown:
+		return errors.New("connection closed")
+	}
+}
+
+// sendImageReq is an internal envelope to bundle up the user request and send it
+// over to the connection for serialization, encryption and transfer.
+type sendImageReq struct {
+	to      string
+	image   []byte
+	thumb   []byte
+	caption string
+	sent    chan error
 }

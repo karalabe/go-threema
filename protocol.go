@@ -8,13 +8,19 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"image"
 	"io"
 	"log"
+	"mime"
+	"net/http"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/nacl/box"
+	"golang.org/x/crypto/nacl/secretbox"
 )
 
 const (
@@ -37,41 +43,46 @@ const (
 )
 
 const (
-	messageText                = 0x01
-	messageImage               = 0x02
-	messageLocation            = 0x10
-	messageVideo               = 0x13
-	messageAudio               = 0x14
-	messageBallotCreate        = 0x15
-	messageBallotVote          = 0x16
-	messageFile                = 0x17
-	messageContactSetPhoto     = 0x18
-	messageContactDeletePhoto  = 0x19
-	messageContactRequestPhoto = 0x1a
-	messageGroupText           = 0x41
-	messageGroupLocation       = 0x42
-	messageGroupImage          = 0x43
-	messageGroupVideo          = 0x44
-	messageGroupAudio          = 0x45
-	messageGroupFile           = 0x46
-	messageGroupCreate         = 0x4a
-	messageGroupRename         = 0x4b
-	messageGroupLeave          = 0x4c
-	messageGroupJoinRequest    = 0x4d
-	messageGroupJoinResponse   = 0x4e
-	messageGroupSetPhoto       = 0x50
-	messageGroupRequestSync    = 0x51
-	messageGroupBallotCreate   = 0x52
-	messageGroupBallotVote     = 0x53
-	messageGroupDeletePhoto    = 0x54
-	messageVoipCallOffer       = 0x60
-	messageVoipCallAnswer      = 0x61
-	messageVoipIceCandidates   = 0x62
-	messageVoipCallHangup      = 0x63
-	messageVoipCallRinging     = 0x64
-	messageDeliveryReceipt     = 0x80
-	messageTypingIndicator     = 0x90
-	messageAuthToken           = 0xff
+	messageText                = byte(0x01) // Simple text messages between users
+	messageImage               = byte(0x02) // Legacy? Not processed by the Android client
+	messageLocation            = byte(0x10)
+	messageVideo               = byte(0x13)
+	messageAudio               = byte(0x14)
+	messageBallotCreate        = byte(0x15)
+	messageBallotVote          = byte(0x16)
+	messageFile                = byte(0x17)
+	messageContactSetPhoto     = byte(0x18)
+	messageContactDeletePhoto  = byte(0x19)
+	messageContactRequestPhoto = byte(0x1a)
+	messageGroupText           = byte(0x41)
+	messageGroupLocation       = byte(0x42)
+	messageGroupImage          = byte(0x43)
+	messageGroupVideo          = byte(0x44)
+	messageGroupAudio          = byte(0x45)
+	messageGroupFile           = byte(0x46)
+	messageGroupCreate         = byte(0x4a)
+	messageGroupRename         = byte(0x4b)
+	messageGroupLeave          = byte(0x4c)
+	messageGroupJoinRequest    = byte(0x4d)
+	messageGroupJoinResponse   = byte(0x4e)
+	messageGroupSetPhoto       = byte(0x50)
+	messageGroupRequestSync    = byte(0x51)
+	messageGroupBallotCreate   = byte(0x52)
+	messageGroupBallotVote     = byte(0x53)
+	messageGroupDeletePhoto    = byte(0x54)
+	messageVoipCallOffer       = byte(0x60)
+	messageVoipCallAnswer      = byte(0x61)
+	messageVoipIceCandidates   = byte(0x62)
+	messageVoipCallHangup      = byte(0x63)
+	messageVoipCallRinging     = byte(0x64)
+	messageDeliveryReceipt     = byte(0x80)
+	messageTypingIndicator     = byte(0x90)
+	messageAuthToken           = byte(0xff)
+)
+
+var (
+	fileMessageBlobNonce  = [nonceLength]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
+	fileMessageThumbNonce = [nonceLength]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02}
 )
 
 const (
@@ -79,6 +90,23 @@ const (
 	// connection to the server alive.
 	heartbeat = 3 * time.Minute
 )
+
+// fileMessage is the payload of a file announcement. To make things interesting,
+// it is JSON opposed to all the other binary messages.
+type fileMessage struct {
+	BlobID         string          `json:"b"`
+	ThumbID        string          `json:"t"`
+	SymKey         string          `json:"k"`
+	BlobMime       string          `json:"m"`
+	ThumbMime      string          `json:"p"`
+	Name           string          `json:"n"`
+	Size           int             `json:"s"`
+	RenderTypeDepr int             `json:"i"`
+	RenderType     int             `json:"j"`
+	Desc           string          `json:"d"`
+	CorrID         string          `json:"c"`
+	Metadata       json.RawMessage `json:"x"`
+}
 
 // reader is an infinite loop that keeps pulling and delivering messages until
 // the connection dies.
@@ -148,7 +176,7 @@ func (c *Connection) reader() {
 			// from the Threema identity server, we're simple and dumb.
 			if peerkey, ok := c.id.contacts[from]; !ok {
 				if c.handler.Spam == nil {
-					log.Printf("No handler for spam messages")
+					log.Printf("No handler for spam messages from %s", from)
 				} else {
 					c.handler.Spam(from, nick, when)
 				}
@@ -156,7 +184,7 @@ func (c *Connection) reader() {
 				message, ok := box.Open(nil, content, &nonce, peerkey, c.id.secretKey)
 				if !ok {
 					if c.handler.Spam == nil {
-						log.Printf("No handler for spam messages")
+						log.Printf("No handler for unencodable messages")
 					} else {
 						c.handler.Spam(from, nick, when)
 					}
@@ -216,11 +244,77 @@ func (c *Connection) handleMessage(from string, nick string, when time.Time, con
 		}
 		c.handler.Message(from, nick, when, string(content[1:len(content)-padding]))
 
+	case messageFile:
+		// We've received a file message, parse the content and retrieve the data
+		padding := int(content[len(content)-1])
+		content := content[1 : len(content)-padding]
+
+		var metadata fileMessage
+		if err := json.Unmarshal(content, &metadata); err != nil {
+			log.Printf("Failed to unmarshal file message: %v", err)
+			return
+		}
+		encblob, err := downloadBlob(metadata.BlobID)
+		if err != nil {
+			log.Printf("Failed to retrieve main blob: %v", err)
+			return
+		}
+		var encthumb []byte
+		if len(metadata.ThumbID) > 0 {
+			encthumb, err = downloadBlob(metadata.ThumbID)
+			if err != nil {
+				log.Printf("Failed to retrieve thumbnail blob: %v", err)
+				return
+			}
+		}
+		// Decrypt the primary and thumbnail blobs and deliver them upstream
+		var key [symmetricLength]byte
+		if _, err := hex.Decode(key[:], []byte(metadata.SymKey)); err != nil {
+			log.Printf("Failed to parse symmetric key: %v", err)
+			return
+		}
+		decblob, ok := secretbox.Open(nil, encblob, &fileMessageBlobNonce, &key)
+		if !ok {
+			log.Printf("Failed to decrypt main blob")
+			return
+		}
+		var decthumb []byte
+		if len(encthumb) > 0 {
+			decthumb, ok = secretbox.Open(nil, encthumb, &fileMessageThumbNonce, &key)
+			if !ok {
+				log.Printf("Failed to decrypt main blob")
+				return
+			}
+		}
+		if c.handler.Message == nil {
+			log.Printf("No handler for text messages")
+			return
+		}
+		// We're yoloing it, just try to decode and if an image, be happy
+		img, _, err := image.Decode(bytes.NewReader(decblob))
+		if err != nil {
+			log.Printf("Only image files are supported")
+			return
+		}
+		var thumb image.Image
+		if len(decthumb) > 0 {
+			thumb, _, err = image.Decode(bytes.NewReader(decthumb))
+			if err != nil {
+				log.Printf("Failed to decode thumbnail: %v", err)
+				return
+			}
+		}
+		if c.handler.Image == nil {
+			log.Printf("No handler for image messages")
+			return
+		}
+		c.handler.Image(from, nick, when, img, thumb, metadata.Desc)
+
 	case messageDeliveryReceipt:
 		// Remote user acked the delivery of our message, we don't care for now
 
 	default:
-		log.Printf("Unknown message type from Threema user: %d", content[0])
+		log.Printf("Unknown message type from Threema user: %d: %x", content[0], content)
 	}
 }
 
@@ -244,6 +338,7 @@ func (c *Connection) sender() {
 		var (
 			message []byte
 			unblock chan error
+			err     error
 		)
 		select {
 		case <-c.readerDown:
@@ -268,31 +363,64 @@ func (c *Connection) sender() {
 
 		case msg := <-c.sendTextCh:
 			// We're sending a text message, serialize it for the recipient
-			nonce, payload, err := c.serializeTextMessage(msg.to, msg.text)
-			if err != nil {
-				msg.sent <- err
-				continue
-			}
-			id := make([]byte, 8)
-			if _, err := io.ReadFull(rand.Reader, id); err != nil {
+			if message, err = c.serializeEnvelope(messageText, msg.to, []byte(msg.text)); err != nil {
 				msg.sent <- err
 				continue
 			}
 			unblock = msg.sent
 
-			// Bundle up all the metadata before the actual content
-			message = append(message, []byte{payloadOutgoungMessage, 0x00, 0x00, 0x00}...)
-			message = append(message, []byte(c.id.identity)...)
-			message = append(message, []byte(msg.to)...)
-			message = append(message, id...)
-			message = append(message, serializeUint32(uint32(time.Now().Unix()))...)
-			message = append(message, []byte{0x01}...)       // push the message
-			message = append(message, []byte{0x00}...)       // reserved
-			message = append(message, []byte{0x00, 0x00}...) // metalen
-			message = append(message, make([]byte, 32)...)   // nick
-			message = append(message, nonce...)
-			message = append(message, payload...)
+		case msg := <-c.sendImageCh:
+			// We're sending an image message, serialize and upload it to the
+			// Threema blob server first since those are transmitted out of protocol.
+			var symkey [symmetricLength]byte
+			if _, err := io.ReadFull(rand.Reader, symkey[:]); err != nil {
+				msg.sent <- err
+				continue
+			}
+			blob := secretbox.Seal(nil, msg.image, &fileMessageBlobNonce, &symkey)
+			blobID, err := uploadBlob(blob)
+			if err != nil {
+				msg.sent <- err
+				continue
+			}
+			blobMime := http.DetectContentType(msg.image)
+			blobExts, err := mime.ExtensionsByType(blobMime)
+			if err != nil || len(blobExts) == 0 {
+				msg.sent <- fmt.Errorf("failed to guess image file extension: %v", err)
+				continue
+			}
+			thumb := secretbox.Seal(nil, msg.thumb, &fileMessageThumbNonce, &symkey)
+			thumbID, err := uploadBlob(thumb)
+			if err != nil {
+				msg.sent <- err
+				continue
+			}
+			timestamp := time.Now().UTC().Format("20060102-150405.000")
+			timestamp = strings.ReplaceAll(timestamp, ".", "")
 
+			payload, err := json.Marshal(&fileMessage{
+				BlobID:         hex.EncodeToString(blobID),
+				ThumbID:        hex.EncodeToString(thumbID),
+				SymKey:         hex.EncodeToString(symkey[:]),
+				BlobMime:       blobMime,
+				ThumbMime:      http.DetectContentType(msg.thumb),
+				Name:           "go-threema-" + timestamp + blobExts[0],
+				Size:           len(msg.image),
+				RenderTypeDepr: 1,
+				RenderType:     1,
+				Desc:           msg.caption,
+				CorrID:         "",
+				Metadata:       []byte("{}"),
+			})
+			if err != nil {
+				msg.sent <- err
+				continue
+			}
+			if message, err = c.serializeEnvelope(messageFile, msg.to, payload); err != nil {
+				msg.sent <- err
+				continue
+			}
+			unblock = msg.sent
 		}
 		// Message binary constructed, encrypt and deliver it to Threema
 		payload := box.Seal(nil, message, c.clientNonce.inc(), c.serverKey, c.clientKey)
@@ -319,29 +447,49 @@ func (c *Connection) sender() {
 	}
 }
 
-// serializeTextMessage converts a recipient and a text message into an encrypted
-// Threema message.
-func (c *Connection) serializeTextMessage(to string, text string) ([]byte, []byte, error) {
-	// Create the tagged and padded plaintext message
-	var blob []byte
+// serializeEnvelope takes an already serialized app message, encrypts it and wraps
+// the result into a  wire envelope for the chat server.
+func (c *Connection) serializeEnvelope(kind byte, to string, payload []byte) ([]byte, error) {
+	// Encrypt the cleartext payload to the designated recipient
+	var plaintext []byte
 
-	blob = append(blob, byte(messageText))
-	blob = append(blob, []byte(text)...)
+	plaintext = append(plaintext, kind)
+	plaintext = append(plaintext, payload...)
 
-	padding := 256 - (len(blob) % 256) - 1
-	blob = append(blob, bytes.Repeat([]byte{0x00}, padding)...)
-	blob = append(blob, byte(padding))
+	padding := 256 - (len(plaintext) % 256) - 1
+	plaintext = append(plaintext, bytes.Repeat([]byte{0x00}, padding)...)
+	plaintext = append(plaintext, byte(padding))
 
-	// Encrypt it with the user's public key
 	pubkey, ok := c.id.contacts[to]
 	if !ok {
-		return nil, nil, fmt.Errorf("recipient not a known contact: %s", to)
+		return nil, fmt.Errorf("recipient not a known contact: %s", to)
 	}
 	var nonce [nonceLength]byte
 	if _, err := io.ReadFull(rand.Reader, nonce[:]); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return nonce[:], box.Seal(nil, blob, &nonce, pubkey, c.id.secretKey), nil
+	ciphertext := box.Seal(nil, plaintext, &nonce, pubkey, c.id.secretKey)
+
+	// Package up the encrypted message into a wire envelope and return for delivery
+	id := make([]byte, 8)
+	if _, err := io.ReadFull(rand.Reader, id); err != nil {
+		return nil, err
+	}
+	var envelope []byte
+
+	envelope = append(envelope, []byte{payloadOutgoungMessage, 0x00, 0x00, 0x00}...)
+	envelope = append(envelope, []byte(c.id.identity)...)
+	envelope = append(envelope, []byte(to)...)
+	envelope = append(envelope, id...)
+	envelope = append(envelope, serializeUint32(uint32(time.Now().Unix()))...)
+	envelope = append(envelope, []byte{0x01}...)       // push the message
+	envelope = append(envelope, []byte{0x00}...)       // reserved
+	envelope = append(envelope, []byte{0x00, 0x00}...) // metalen
+	envelope = append(envelope, make([]byte, 32)...)   // nick
+	envelope = append(envelope, nonce[:]...)
+	envelope = append(envelope, ciphertext...)
+
+	return envelope, nil
 }
 
 // serializeUint32 is a small helper to avoid the annoying 3 liner API.

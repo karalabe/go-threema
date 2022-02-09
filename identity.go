@@ -28,6 +28,9 @@ const (
 	// publicLength is the length of a Threema public key (curve25519)
 	publicLength = 32
 
+	// symmetricLength is the length of a Threema symmetric encryption key.
+	symmetricLength = 32
+
 	// nonceLength is the cryptographic nonces used for message decryption
 	nonceLength = 24
 )
