@@ -6,11 +6,13 @@ package threema
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"golang.org/x/crypto/curve25519"
@@ -33,6 +35,18 @@ const (
 
 	// nonceLength is the cryptographic nonces used for message decryption
 	nonceLength = 24
+
+	// backupSaltLength is a cryptographic salt used to encrypt the identity.
+	backupSaltLength = 8
+
+	// backupSecretLength is a cryptographic key used to encrypt the identity.
+	backupSecretLength = 32
+
+	// backupChecksumLength is the number of checksum bytes in the exported identity.
+	backupChecksumLength = 2
+
+	// backupPbkdfIters is the number of iterations for deriving the password key.
+	backupPbkdfIters = 100000
 )
 
 // Identity contains the Threema specific user identifier as well as the crypto
@@ -53,27 +67,21 @@ func Identify(export string, pass string) (*Identity, error) {
 		return nil, err
 	}
 	// Sanity check that the key seems ok before decryption
-	const (
-		saltLength    = 8
-		csumLength    = 2
-		skeyLength    = 32
-		kdfIterations = 100000
-	)
-	if want := saltLength + identityLength + secretLength + csumLength; len(enc) != want {
+	if want := backupSaltLength + identityLength + secretLength + backupChecksumLength; len(enc) != want {
 		return nil, fmt.Errorf("invalid export length: have %v, want %v", len(enc), want)
 	}
-	key := pbkdf2.Key([]byte(pass), enc[:saltLength], kdfIterations, skeyLength, sha256.New)
+	key := pbkdf2.Key([]byte(pass), enc[:backupSaltLength], backupPbkdfIters, backupSecretLength, sha256.New)
 
 	// Open the NaCl encrypted identity export (not a real NaCl box, only a single stream chunk)
 	var naclNonce [nonceLength]byte
-	var naclKey [skeyLength]byte
+	var naclKey [backupSecretLength]byte
 	copy(naclKey[:], key)
 
-	dec := make([]byte, len(enc)-saltLength)
-	salsa20.XORKeyStream(dec, enc[saltLength:], naclNonce[:], &naclKey)
+	dec := make([]byte, len(enc)-backupSaltLength)
+	salsa20.XORKeyStream(dec, enc[backupSaltLength:], naclNonce[:], &naclKey)
 
 	// Hash the decrypted identity and secret key and ensure they match the checksum
-	if csum := sha256.Sum256(dec[:identityLength+secretLength]); !bytes.Equal(csum[:csumLength], dec[identityLength+secretLength:]) {
+	if checksum := sha256.Sum256(dec[:identityLength+secretLength]); !bytes.Equal(checksum[:backupChecksumLength], dec[identityLength+secretLength:]) {
 		return nil, errors.New("checksum verification failed")
 	}
 	// Decryption succeeded, reassemble the Threema identity locally
@@ -91,6 +99,39 @@ func Identify(export string, pass string) (*Identity, error) {
 			string(dec[:identityLength]): &publicKey, // inject self, helps testing
 		},
 	}, nil
+}
+
+// Export generates a new Threema backup from the existing identity with the
+// given secret passphrase.
+func (t *Identity) Export(pass string) (string, error) {
+	// Construct the plaintext identity blob
+	identity := append([]byte(t.identity), t.secretKey[:]...)
+
+	checksum := sha256.Sum256(append([]byte(t.identity), t.secretKey[:]...))
+	identity = append(identity, checksum[:2]...)
+
+	// Encrypt the identity with the given password and a random salt
+	var salt [backupSaltLength]byte
+	if _, err := io.ReadFull(rand.Reader, salt[:]); err != nil {
+		return "", err
+	}
+	key := pbkdf2.Key([]byte(pass), salt[:], backupPbkdfIters, backupSecretLength, sha256.New)
+
+	var naclNonce [nonceLength]byte
+	var naclKey [backupSecretLength]byte
+	copy(naclKey[:], key)
+
+	enc := make([]byte, len(identity))
+	salsa20.XORKeyStream(enc, identity, naclNonce[:], &naclKey)
+
+	// Export the binary into the Threema ID format and return to the user
+	var export string
+
+	encoded := base32.StdEncoding.EncodeToString(append(salt[:], enc...))
+	for i := 0; i < len(encoded)/4; i++ {
+		export = export + encoded[i*4:(i+1)*4] + "-"
+	}
+	return export[:len(export)-1], nil
 }
 
 // Self retrieves the Threema ID of the loaded identity.

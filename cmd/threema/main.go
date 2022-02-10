@@ -5,6 +5,8 @@
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/karalabe/go-threema"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"golang.org/x/term"
 )
 
 var (
@@ -26,6 +29,7 @@ var (
 func main() {
 	viper.AutomaticEnv()
 
+	// Prepare the commansd for sending messages
 	cmdSendText := &cobra.Command{
 		Use:   "text",
 		Short: "Send a text message to a Threema user",
@@ -61,8 +65,14 @@ func main() {
 	}
 	cmdSend.AddCommand(cmdSendText, cmdSendImage)
 
+	// Prepare the administrative commands
+	cmdExport := &cobra.Command{
+		Use:   "export",
+		Short: "Re-export a Threema backup with a new password",
+		Run:   exportBackup,
+	}
 	rootCmd := &cobra.Command{Use: "threema"}
-	rootCmd.AddCommand(cmdSend)
+	rootCmd.AddCommand(cmdSend, cmdExport)
 	rootCmd.Execute()
 }
 
@@ -109,6 +119,48 @@ func sendImage(cmd *cobra.Command, args []string) {
 		log.Fatalf("Failed to send image message: %v", err)
 	}
 	log.Println("Message sent.")
+}
+
+func exportBackup(cmd *cobra.Command, args []string) {
+	// Try to load the previously encrypted identity
+	id, err := threema.Identify(identityFlag, passwordFlag)
+	if err != nil {
+		log.Fatalf("Failed to load sender identity: %v", err)
+	}
+	fmt.Printf("Re-exporting identity: %s\n\n", identityFlag)
+
+	// Read the new password from the user and confirm it
+	fmt.Printf("Please enter new export password: ")
+	secret, err := term.ReadPassword(0)
+	if err != nil {
+		log.Fatalf("Failed to read new password: %v", err)
+	}
+	fmt.Println()
+
+	fmt.Printf("Please confirm new export password: ")
+	confirm, err := term.ReadPassword(0)
+	if err != nil {
+		log.Fatalf("Failed to confirm new password: %v", err)
+	}
+	fmt.Println()
+
+	if !bytes.Equal(secret, confirm) {
+		log.Fatalf("Entered password and confirmation do not match")
+	}
+	fmt.Println()
+
+	// Export the identity with the new password and sanity check that we can
+	// load it back up.
+	export, err := id.Export(string(secret))
+	if err != nil {
+		log.Fatalf("Failed to export identity: %v", err)
+	}
+	fmt.Printf("Re-exported identity: %s\n\n", export)
+	fmt.Println(
+		"If you are using this tool with environment variables for setting the identity\n" +
+			"and import secret (THREEMA_ID_BACKUP and THREEMA_ID_SECRET), you will need to\n" +
+			"re-set those variables to use the newly exported identity backups.",
+	)
 }
 
 // makeIdentity constructs the sender identity with the recipient as a contact
