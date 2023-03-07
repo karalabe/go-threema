@@ -94,18 +94,18 @@ const (
 // fileMessage is the payload of a file announcement. To make things interesting,
 // it is JSON opposed to all the other binary messages.
 type fileMessage struct {
-	BlobID         string          `json:"b"`
-	ThumbID        string          `json:"t"`
-	SymKey         string          `json:"k"`
-	BlobMime       string          `json:"m"`
-	ThumbMime      string          `json:"p"`
-	Name           string          `json:"n"`
-	Size           int             `json:"s"`
-	RenderTypeDepr int             `json:"i"`
-	RenderType     int             `json:"j"`
-	Desc           string          `json:"d"`
-	CorrID         string          `json:"c"`
-	Metadata       json.RawMessage `json:"x"`
+	BlobID         string      `json:"b"`
+	ThumbID        string      `json:"t"`
+	SymKey         string      `json:"k"`
+	BlobMime       string      `json:"m"`
+	ThumbMime      string      `json:"p"`
+	Name           string      `json:"n"`
+	Size           int         `json:"s"`
+	RenderTypeDepr int         `json:"i"`
+	RenderType     int         `json:"j"`
+	Desc           string      `json:"d,omitempty"`
+	CorrID         string      `json:"c,omitempty"`
+	Metadata       interface{} `json:"x"`
 }
 
 // reader is an infinite loop that keeps pulling and delivering messages until
@@ -410,7 +410,7 @@ func (c *Connection) sender() {
 				RenderType:     1,
 				Desc:           msg.caption,
 				CorrID:         "",
-				Metadata:       []byte("{}"),
+				Metadata:       map[string]int{"h": msg.height, "w": msg.width},
 			})
 			if err != nil {
 				msg.sent <- err
@@ -458,7 +458,7 @@ func (c *Connection) serializeEnvelope(kind byte, to string, payload []byte) ([]
 
 	padding := 256 - (len(plaintext) % 256) - 1
 	plaintext = append(plaintext, bytes.Repeat([]byte{0x00}, padding)...)
-	plaintext = append(plaintext, byte(padding))
+	plaintext = append(plaintext, byte(padding+1))
 
 	pubkey, ok := c.id.contacts[to]
 	if !ok {

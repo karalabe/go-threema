@@ -80,6 +80,8 @@ func (c *Connection) SendImage(to string, blob []byte, caption string) error {
 	case c.sendImageCh <- &sendImageReq{
 		to:      to,
 		image:   blob,
+		width:   src.Bounds().Dx(),
+		height:  src.Bounds().Dy(),
 		thumb:   dst.Bytes(),
 		caption: caption,
 		sent:    errc,
@@ -95,6 +97,8 @@ func (c *Connection) SendImage(to string, blob []byte, caption string) error {
 type sendImageReq struct {
 	to      string
 	image   []byte
+	width   int
+	height  int
 	thumb   []byte
 	caption string
 	sent    chan error
